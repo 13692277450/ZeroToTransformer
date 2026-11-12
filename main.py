@@ -3,6 +3,24 @@
 # 按 Shift+F10 执行或将其替换为您的代码。
 # 按 双击 Shift 在所有地方搜索类、文件、工具窗口、操作和设置。
 
+GPT_BASIC_CONFIG = {
+    "model": "gpt2",
+    "max_length": 1024,
+    "n_layers": 12,
+    "n_heads": 12,
+    "n_embd": 768,
+    "dropout": 0.0,
+    "temperature": 0.7,
+}
+
+MODEL_LIST = {
+    {"model": "gpt2", "config": GPT_BASIC_CONFIG, "params": 117M },
+    {"model": "gpt2-medium", "config": GPT_BASIC_CONFIG, "params": 345M},
+    {"model": "gpt2-large", "config": GPT_BASIC_CONFIG, "params": 762M},
+    {"model": "gpt2-xl", "config": GPT_BASIC_CONFIG, "params": 1558M},
+}
+
+
 
 def print_hi(name):
     # 在下面的代码行中使用断点来调试脚本。
