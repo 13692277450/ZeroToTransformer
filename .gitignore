@@ -1,3 +1,5 @@
 /shards
 /shardsold
 /__pycache__
+/shardsTxt
+*.pth

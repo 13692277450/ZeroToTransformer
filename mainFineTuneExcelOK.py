@@ -83,8 +83,8 @@ class FeedForward(nn.Module):
             nn.Linear(4 * cfg["emb_dim"], cfg["emb_dim"])
             # 3072 -> 768
         )
-        def forward(self, x):
-            return self.layers(x)
+    def forward(self, x):
+        return self.layers(x)
 ############################ LayerNorm ##############################
 class LayerNorm(nn.Module):
     def __init__(self, emb_dim):
@@ -93,7 +93,7 @@ class LayerNorm(nn.Module):
         self.scale = nn.Parameter(torch.ones(emb_dim))
         self.shift = nn.Parameter(torch.zeros(emb_dim))
         
-    def forwad(self, x):
+    def forward(self, x):
         mean = x.mean(dim=-1, keepdim=True)
         var = x.var(dim=-1, keepdim=True, unbiased=False)
         norm_x = (x - mean) / torch.sqrt(var + self.eps)
@@ -101,14 +101,58 @@ class LayerNorm(nn.Module):
         
 ############################ MultiHeadAttention ######################
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_in, d_out, context_length, num_heads, dropout, qkv_bias):
+    def __init__(self, d_in, d_out, context_length, num_heads, dropout, qkv_bias=False):
         super().__init__()
-        self.d_in = d_in
+        assert (d_out % num_heads == 0), \
+            "d_out must be divisible by num_heads"
         self.d_out = d_out
-        self.context_length = context_length
         self.num_heads = num_heads
-        self.dropout = dropout
-        self.qkv_bias = qkv_bias
+        self.head_dim = d_out // num_heads
+        self.W_query = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_key = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
+        self.out_proj = nn.Linear(d_out, d_out)
+        self.dropout = nn.Dropout(dropout)
+        self.register_buffer(
+            "mask",
+            torch.triu(torch.ones(context_length, context_length),
+                    diagonal=1)
+        )
+    def forward(self, x, attention_mask=None):
+        b, num_tokens, d_in = x.shape
+        keys = self.W_key(x)
+        values = self.W_value(x)
+        queries = self.W_query(x)
+        keys = keys.view(b, num_tokens, self.num_heads, self.head_dim)
+        values = values.view(b, num_tokens, self.num_heads, self.head_dim)
+        queries = queries.view(
+            b, num_tokens, self.num_heads, self.head_dim
+        )
+        keys = keys.transpose(1,2)
+        queries = queries.transpose(1,2)
+        values = values.transpose(1,2)
+        
+        attn_scores = queries @ keys.transpose(2,3)
+        mask_bool = self.mask.bool()[:num_tokens, :num_tokens] # type: ignore
+        
+        attn_scores.masked_fill_(mask_bool, -torch.inf)
+        if attention_mask is not None:
+            extended_mask = attention_mask[:,None, None,:]
+            attn_scores = attn_scores.masked_fill(extended_mask == 0, -torch.inf)
+        
+        attn_weights = torch.softmax(
+            attn_scores /keys.shape[-1]**0.5, dim=-1
+        )
+        context_vec = (attn_weights @ values).transpose(1,2)
+        context_vec = context_vec.contiguous().view(
+            b, num_tokens, self.d_out
+        )
+        context_vec = self.out_proj(context_vec)
+        return context_vec        
+        
+############################ CausalAttention ######################
+
+        
 ############################ Transformer Block ######################
 class TransformerBlock(nn.Module):
     def __init__(self, cfg):
@@ -125,11 +169,11 @@ class TransformerBlock(nn.Module):
         self.norm1 = LayerNorm(cfg["emb_dim"])
         self.norm2 = LayerNorm(cfg["emb_dim"])
         self.drop_shortcut = nn.Dropout(cfg["drop_rate"])
-    def forward(self, x):
+    def forward(self, x, attention_mask=None):
         # 第一个子层：多头因果注意力
         shortcut = x            # 1. 备份原始输入
         x = self.norm1(x)       # 2. 层归一化（稳定数值）
-        x = self.att(x)         # 3. 多头因果注意力（提取上下文关系）
+        x = self.att(x, attention_mask)         # 3. 多头因果注意力（提取上下文关系）
         x = self.drop_shortcut(x) # 4. Dropout（训练时防止过拟合，推理时关闭）
         x = x + shortcut        # 5. 第一次残差连接（将处理后的特征与原始输入相加）
         
@@ -150,26 +194,37 @@ class GPT_MODEL(torch.nn.Module):
         self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
         self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
         self.drop_emb = nn.Dropout(cfg["drop_rate"])
-        self.trf_blocks = nn.Sequential(
-            *[TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
+        self.trf_blocks = nn.ModuleList(
+            [TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
             
         )
         self.final_norm = LayerNorm(cfg["emb_dim"])
         self.out_head = nn.Linear(
             cfg["emb_dim"], cfg["vocab_size"], bias=False
         )
-    def forwd(self, in_idx):
-        batch_size, seq_len= in_idx.shape
-        tok_embeds = self.tok_emb(in_idx)
+    def forward(self,  input_ids, attention_mask=None, labels=None):
+        batch_size, seq_len= input_ids.shape
+        tok_embeds = self.tok_emb(input_ids)
         pos_embeds = self.pos_emb(
-            torch.arange(seq_len, device=in_idx.device)
+            torch.arange(seq_len, device=input_ids.device)
         )
         x = tok_embeds + pos_embeds
         x = self.drop_emb(x)
-        x = self.trf_blocks(x)
+        for block in self.trf_blocks:
+            x = block(x, attention_mask) ######书上没有，必须
         x = self.final_norm(x)
         logits = self.out_head(x)
-        return logits
+        
+        loss = None
+        if labels is not None:
+            loss = torch.nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                labels.view(-1),
+                ignore_index=-100
+            )
+        
+        
+        return {"logits": logits, "loss": loss}
 ############################ MODEL ############################
 
 
@@ -205,7 +260,7 @@ def create_text_webdataset(df, output_dir, max_samples_per_shard=10000):
                 "text": text.encode("utf-8")
             }
             sink.write(sample)
-            console.print(sample.values())
+            # console.print(sample.values())
 
 ############################Prepare Data############################
 def decode_txt(sample):
@@ -255,14 +310,14 @@ def collate_fn(batch):
 
 def train_data():
     train_dataset = (
-        wds.WebDataset("shards/retail-{000000..000053}.tar", shardshuffle=False) # pyright: ignore[reportAttributeAccessIssue]
+        wds.WebDataset("shards/retail-{000000..000002}.tar", shardshuffle=1000) # pyright: ignore[reportAttributeAccessIssue]
         .map(decode_txt)      # 👈 用 .map() 来执行自定义的解码逻辑
         .to_tuple("text")
     )
     train_dataloader = DataLoader(
         train_dataset, 
         batch_size=2, 
-        num_workers=4,
+        num_workers=0,
         collate_fn = collate_fn)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -275,7 +330,7 @@ def train_data():
             labels = batch["labels"].to(device)
             optimizer.zero_grad()
             outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs.loss
+            loss = outputs["loss"]
             loss.backward()
             optimizer.step()
             if step % 10 == 0:
@@ -518,8 +573,8 @@ def save_model():
 # 按装订区域中的绿色按钮以运行脚本。
 if __name__ == '__main__':
     status = "Training"
-    logger.info("Starting the prepare data...")
-    prepare_data()
+    # logger.info("Starting the prepare data...")
+    # prepare_data()
     logger.info("Starting the train data...")
     console.print("Training data...", style='blue')
     train_data()
