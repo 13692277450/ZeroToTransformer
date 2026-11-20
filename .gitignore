@@ -5,6 +5,8 @@
 *.pth
 /mixTrain
 app.log
+app.log
+sft_data.json
 allChineseLiteral_sft_custom.json
 sft_data.json
 pretrain_body_clean.txt
