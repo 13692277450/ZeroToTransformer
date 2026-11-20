@@ -2,6 +2,11 @@ import re
 import os
 import shutil
 
+
+
+
+
+
 with open("allChineseLiteral.txt", "r", encoding="utf-8") as file:
     raw_text = file.read()
     raw_text = raw_text.replace("\n", "")

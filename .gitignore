@@ -3,3 +3,8 @@
 /__pycache__
 /shardsTxt
 *.pth
+/mixTrain
+app.log
+allChineseLiteral_sft_custom.json
+sft_data.json
+pretrain_body_clean.txt
