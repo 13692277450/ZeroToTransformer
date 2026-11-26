@@ -23,8 +23,11 @@ from rich.console import Console
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 console = Console()
-TF_ENABLE_ONEDNN_OPTS=0
-
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+tokenizer = AutoTokenizer.from_pretrained(
+    "Qwen/Qwen2.5-0.5B-Instruct",
+    trust_remote_code=True,
+)
 GPT_CONFIG_124M = {
     "model": "gpt2",
     "context_length": 1024,
@@ -33,7 +36,7 @@ GPT_CONFIG_124M = {
     "emb_dim": 768,
     "drop_rate": 0.1,
     "temperature": 0.7,
-    "vocab_size": 50257,
+    "vocab_size": 151665, #[50257, 768]
     "qkv_bias": True
 }
 MODEL_CONFIGS = {
@@ -44,7 +47,8 @@ MODEL_CONFIGS = {
 }
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-tokenizer = tiktoken.get_encoding("gpt2")
+# tokenizer = tiktoken.get_encoding("gpt2")
+
 model_name = "gpt2-small (124M)"
 NEW_CONFIG = GPT_CONFIG_124M.copy()
 NEW_CONFIG.update(MODEL_CONFIGS[model_name])
@@ -377,9 +381,9 @@ if __name__ == '__main__':
     status = "Training"
     logger.info("Starting the train data...")
     console.print("Training data...", style='blue')
-    train_dataTxt()
+    # train_dataTxt()
     logger.info("Starting the save model...")
-    save_model()    
+    # save_model()    
     if status == "Training":
         pass
     else:
@@ -389,7 +393,7 @@ if __name__ == '__main__':
 ############################## TEST #############################################
 model=GPT_MODEL(NEW_CONFIG)
 model.to(device)
-model.load_state_dict(torch.load("allChineseLiteralCN.pth"))
+model.load_state_dict(torch.load("allChineseLiteralCN.pth", map_location=torch.device("cpu")))
 model.eval()
 
 def generate_text(prompt, max_new_tokens=100):
